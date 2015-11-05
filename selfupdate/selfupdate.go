@@ -1,3 +1,5 @@
+// Package selfupdate performs an update of the running process
+//
 // Update protocol:
 //
 //   GET hk.heroku.com/hk/linux-amd64.json
@@ -52,6 +54,7 @@ const (
 
 const devValidTime = 7 * 24 * time.Hour
 
+// ErrHashMismatch represents a hash mismatch error post-patching
 var ErrHashMismatch = errors.New("new file hash mismatch after patch")
 var up = update.New()
 var defaultHTTPRequester = HTTPRequester{}
