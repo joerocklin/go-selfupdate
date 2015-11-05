@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -56,6 +55,10 @@ const devValidTime = 7 * 24 * time.Hour
 var ErrHashMismatch = errors.New("new file hash mismatch after patch")
 var up = update.New()
 var defaultHTTPRequester = HTTPRequester{}
+
+type logInterface interface {
+	Println(v ...interface{})
+}
 
 // Updater is the configuration and runtime data for doing an update.
 //
@@ -86,6 +89,7 @@ type Updater struct {
 		Version string
 		Sha256  []byte
 	}
+	Logger logInterface
 }
 
 func (u *Updater) getExecRelativeDir(dir string) string {
@@ -145,19 +149,19 @@ func (u *Updater) update() error {
 	bin, err := u.fetchAndVerifyPatch(old)
 	if err != nil {
 		if err == ErrHashMismatch {
-			log.Println("update: hash mismatch from patched binary")
+			u.Logger.Println("update: hash mismatch from patched binary")
 		} else {
 			if u.DiffURL != "" {
-				log.Println("update: patching binary,", err)
+				u.Logger.Println("update: patching binary,", err)
 			}
 		}
 
 		bin, err = u.fetchAndVerifyFullBin()
 		if err != nil {
 			if err == ErrHashMismatch {
-				log.Println("update: hash mismatch from full binary")
+				u.Logger.Println("update: hash mismatch from full binary")
 			} else {
-				log.Println("update: fetching full binary,", err)
+				u.Logger.Println("update: fetching full binary,", err)
 			}
 			return err
 		}

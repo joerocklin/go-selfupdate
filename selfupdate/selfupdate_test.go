@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
+	"os"
 	"testing"
 )
 
@@ -52,6 +54,7 @@ func createUpdater(mr *mockRequester) *Updater {
 		Dir:            "update/",
 		CmdName:        "myapp", // app name
 		Requester:      mr,
+		Logger:         log.New(os.Stderr, "TEST-OUT: ", log.Ldate|log.Ltime|log.Lshortfile),
 	}
 }
 
