@@ -28,8 +28,6 @@
 package selfupdate
 
 import (
-	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -41,7 +39,6 @@ import (
 	"time"
 
 	"github.com/kardianos/osext"
-	"github.com/kr/binarydist"
 	"gopkg.in/inconshreveable/go-update.v0"
 )
 
@@ -50,12 +47,11 @@ const (
 	plat         = runtime.GOOS + "-" + runtime.GOARCH
 )
 
-const devValidTime = 7 * 24 * time.Hour
-
 // ErrHashMismatch represents a hash mismatch error post-patching
 var ErrHashMismatch = errors.New("new file hash mismatch after patch")
-var up = update.New()
-var defaultHTTPRequester = HTTPRequester{}
+
+// ErrInvalidHashLength represents a bad hash length
+var ErrInvalidHashLength = errors.New("Invalid hash length")
 
 type logInterface interface {
 	Println(v ...interface{})
@@ -103,17 +99,8 @@ func (u *Updater) getExecRelativeDir(dir string) string {
 func (u *Updater) BackgroundRun() error {
 	os.MkdirAll(u.getExecRelativeDir(u.Dir), 0777)
 	if u.wantUpdate() {
-		if err := up.CanUpdate(); err != nil {
-			// fail
-			return err
-		}
-		//self, err := osext.Executable()
-		//if err != nil {
-		// fail update, couldn't figure out path to self
-		//return
-		//}
-		// TODO(bgentry): logger isn't on Windows. Replace w/ proper error reports.
-		if err := u.update(); err != nil {
+		u.Logger.Println("Update Wanted")
+		if err := u.Update(); err != nil {
 			return err
 		}
 	}
@@ -129,57 +116,69 @@ func (u *Updater) wantUpdate() bool {
 	return writeTime(path, time.Now().Add(wait))
 }
 
-func (u *Updater) update() error {
-	path, err := osext.Executable()
-	if err != nil {
+// Update does an update check and performs an update - first attempting a binary
+// patch, then attempting a full binary download
+func (u *Updater) Update() error {
+	if updateAvailable, err := u.UpdateAvailable(); updateAvailable == false {
 		return err
 	}
-	old, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer old.Close()
 
-	err = u.fetchInfo()
-	if err != nil {
-		return err
-	}
-	if u.Info.Version == u.CurrentVersion {
+	up := update.New().ApplyPatch(update.PATCHTYPE_BSDIFF).VerifyChecksum(u.Info.Sha256)
+
+	// Construct the Patch URL
+	patchURL := u.DiffURL + u.CmdName + "/" + u.CurrentVersion + "/" + u.Info.Version + "/" + plat
+
+	// Attempt to perform an update from the URL
+	err, _ := up.FromUrl(patchURL)
+	if err == nil {
 		return nil
 	}
-	bin, err := u.fetchAndVerifyPatch(old)
-	if err != nil {
-		if err == ErrHashMismatch {
-			u.Logger.Println("update: hash mismatch from patched binary")
-		} else {
-			if u.DiffURL != "" {
-				u.Logger.Println("update: patching binary,", err)
-			}
-		}
 
-		bin, err = u.fetchAndVerifyFullBin()
-		if err != nil {
-			if err == ErrHashMismatch {
-				u.Logger.Println("update: hash mismatch from full binary")
-			} else {
-				u.Logger.Println("update: fetching full binary,", err)
-			}
-			return err
-		}
-	}
+	// Construct the full binary URL
+	binURL := u.BinURL + u.CmdName + "/" + u.Info.Version + "/" + plat + ".gz"
 
-	// close the old binary before installing because on windows
-	// it can't be renamed if a handle to the file is still open
-	old.Close()
-
-	err, errRecover := up.FromStream(bytes.NewBuffer(bin))
+	// Update by patching failed - let's try updating the full binary
+	up.ApplyPatch(update.PATCHTYPE_NONE)
+	err, errRecover := up.FromUrl(binURL)
 	if errRecover != nil {
 		return fmt.Errorf("update and recovery errors: %q %q", err, errRecover)
 	}
 	if err != nil {
 		return err
 	}
+
 	return nil
+}
+
+// UpdateAvailable returns true if an update is available, and false otherwise.
+// If an error is encountered during the checks, the error will be returned as well
+func (u *Updater) UpdateAvailable() (bool, error) {
+	err := u.fetchInfo()
+	if err != nil {
+		return false, err
+	}
+	if u.Info.Version == u.CurrentVersion {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (u *Updater) fetch(url string) (io.ReadCloser, error) {
+	if u.Requester == nil {
+		u.Requester = &HTTPRequester{}
+	}
+
+	readCloser, err := u.Requester.Fetch(url)
+	if err != nil {
+		return nil, err
+	}
+
+	if readCloser == nil {
+		return nil, fmt.Errorf("Fetch was expected to return non-nil ReadCloser")
+	}
+
+	return readCloser, nil
 }
 
 func (u *Updater) fetchInfo() error {
@@ -193,76 +192,7 @@ func (u *Updater) fetchInfo() error {
 		return err
 	}
 	if len(u.Info.Sha256) != sha256.Size {
-		return errors.New("bad cmd hash in info")
+		return ErrInvalidHashLength
 	}
 	return nil
-}
-
-func (u *Updater) fetchAndVerifyPatch(old io.Reader) ([]byte, error) {
-	bin, err := u.fetchAndApplyPatch(old)
-	if err != nil {
-		return nil, err
-	}
-	if !verifySha(bin, u.Info.Sha256) {
-		return nil, ErrHashMismatch
-	}
-	return bin, nil
-}
-
-func (u *Updater) fetchAndApplyPatch(old io.Reader) ([]byte, error) {
-	r, err := u.fetch(u.DiffURL + u.CmdName + "/" + u.CurrentVersion + "/" + u.Info.Version + "/" + plat)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	var buf bytes.Buffer
-	err = binarydist.Patch(old, &buf, r)
-	return buf.Bytes(), err
-}
-
-func (u *Updater) fetchAndVerifyFullBin() ([]byte, error) {
-	bin, err := u.fetchBin()
-	if err != nil {
-		return nil, err
-	}
-	verified := verifySha(bin, u.Info.Sha256)
-	if !verified {
-		return nil, ErrHashMismatch
-	}
-	return bin, nil
-}
-
-func (u *Updater) fetchBin() ([]byte, error) {
-	r, err := u.fetch(u.BinURL + u.CmdName + "/" + u.Info.Version + "/" + plat + ".gz")
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	buf := new(bytes.Buffer)
-	gz, err := gzip.NewReader(r)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = io.Copy(buf, gz); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func (u *Updater) fetch(url string) (io.ReadCloser, error) {
-	if u.Requester == nil {
-		return defaultHTTPRequester.Fetch(url)
-	}
-
-	readCloser, err := u.Requester.Fetch(url)
-	if err != nil {
-		return nil, err
-	}
-
-	if readCloser == nil {
-		return nil, fmt.Errorf("Fetch was expected to return non-nil ReadCloser")
-	}
-
-	return readCloser, nil
 }

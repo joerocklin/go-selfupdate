@@ -1,8 +1,6 @@
 package selfupdate
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -27,12 +25,6 @@ func readTime(path string) time.Time {
 		return time.Now().Add(1000 * time.Hour)
 	}
 	return t
-}
-
-func verifySha(bin []byte, sha []byte) bool {
-	h := sha256.New()
-	h.Write(bin)
-	return bytes.Equal(h.Sum(nil), sha)
 }
 
 func writeTime(path string, t time.Time) bool {
