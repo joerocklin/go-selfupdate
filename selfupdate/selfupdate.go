@@ -35,8 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -252,11 +250,6 @@ func (u *Updater) fetchBin() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// returns a random duration in [0,n).
-func randDuration(n time.Duration) time.Duration {
-	return time.Duration(rand.Int63n(int64(n)))
-}
-
 func (u *Updater) fetch(url string) (io.ReadCloser, error) {
 	if u.Requester == nil {
 		return defaultHTTPRequester.Fetch(url)
@@ -272,29 +265,4 @@ func (u *Updater) fetch(url string) (io.ReadCloser, error) {
 	}
 
 	return readCloser, nil
-}
-
-func readTime(path string) time.Time {
-	p, err := ioutil.ReadFile(path)
-	if os.IsNotExist(err) {
-		return time.Time{}
-	}
-	if err != nil {
-		return time.Now().Add(1000 * time.Hour)
-	}
-	t, err := time.Parse(time.RFC3339, string(p))
-	if err != nil {
-		return time.Now().Add(1000 * time.Hour)
-	}
-	return t
-}
-
-func verifySha(bin []byte, sha []byte) bool {
-	h := sha256.New()
-	h.Write(bin)
-	return bytes.Equal(h.Sum(nil), sha)
-}
-
-func writeTime(path string, t time.Time) bool {
-	return ioutil.WriteFile(path, []byte(t.Format(time.RFC3339)), 0644) == nil
 }
