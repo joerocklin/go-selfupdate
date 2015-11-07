@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,6 +61,7 @@ func newGzReader(r io.ReadCloser) io.ReadCloser {
 }
 
 func createUpdate(path string, platform string) {
+	log.Printf("Processing %s\n", platform)
 	c := current{Version: version, Sha256: generateSha256(path)}
 
 	b, err := json.MarshalIndent(c, "", "    ")
@@ -81,6 +83,7 @@ func createUpdate(path string, platform string) {
 	}
 	w.Write(f)
 	w.Close() // You must close this first to flush the bytes to the buffer.
+
 	err = ioutil.WriteFile(filepath.Join(genDir, version, platform+".gz"), buf.Bytes(), 0755)
 
 	files, err := ioutil.ReadDir(genDir)
@@ -117,6 +120,8 @@ func createUpdate(path string, platform string) {
 		br := newGzReader(newF)
 		defer br.Close()
 		patch := new(bytes.Buffer)
+
+		log.Printf(" - writing patch %s -> %s\n", file.Name(), version)
 		if err := binarydist.Diff(ar, br, patch); err != nil {
 			panic(err)
 		}
